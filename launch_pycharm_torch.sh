@@ -10,8 +10,8 @@ on_err() {
   local rc=$? line=${BASH_LINENO[0]:-?} cmd=${BASH_COMMAND:-?}
   printf '\n%s[ ERROR ]%s rc=%s line=%s cmd=%q\n' "$RED$BLD" "$RST" "$rc" "$line" "$cmd" >&2
   # peek at recent remote logs if available
-  ssh -q greene-login 'tail -n 40 /scratch/$USER/.jb/salloc.out 2>/dev/null || true' >&2
-  ssh -q greene-login 'tail -n 60 /scratch/$USER/.jb/backend.log 2>/dev/null || true' >&2
+  ssh -q torch-compute 'tail -n 40 /scratch/$USER/.jb/salloc.out 2>/dev/null || true' >&2
+  ssh -q torch-compute 'tail -n 60 /scratch/$USER/.jb/backend.log 2>/dev/null || true' >&2
   cleanup
   exit "$rc"
 }
@@ -40,14 +40,20 @@ cleanup() {
   local port="${LOCAL_PORT:-7777}"
 
   # End existing Slurm job(s) best-effort
-  ssh -q greene-login 'scancel -u "$USER"' || true
+  ssh -q torch-compute 'scancel -u "$USER"' || true
 
-  # Reset .jb on scratch
-  ssh -q greene-login 'rm -rf /scratch/$USER/.jb && mkdir -p /scratch/$USER/.jb' || true
+  # Kill any lingering salloc processes that may hold file handles
+  ssh -q torch-compute 'pkill -u "$USER" salloc' || true
+
+  # Brief wait for processes to fully terminate and release file handles
+  sleep 1
+
+  # Reset .jb on scratch (best-effort, suppress NFS lock file errors)
+  ssh -q torch-compute 'rm -rf /scratch/$USER/.jb 2>/dev/null; mkdir -p /scratch/$USER/.jb' || true
 
   # kill local SSH tunnels
   pkill -f "ssh -N -f -L ${port}:127.0.0.1:" >/dev/null 2>&1 || true
-  pkill -f "ssh .*torch-proxy.* -N -f -L"  >/dev/null 2>&1 || true
+  pkill -f "ssh .*torch-compute.* -N -f -L"  >/dev/null 2>&1 || true
 
   # belt-and-suspenders
   if command -v lsof >/dev/null 2>&1; then
@@ -65,7 +71,7 @@ ssh_try() {
       -o ConnectTimeout=6 -o ConnectionAttempts=1 \
       -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
       -o ControlMaster=no \
-      greene-login "$@" && return 0
+      torch-compute "$@" && return 0
     rc=$?; sleep "$delay"; (( delay<8 && (delay*=2) ))
   done
   return "$rc"
@@ -216,7 +222,7 @@ printf "${BLD}${CYA}\n[ Compute Node Resource Request ]\n${RST}\n"
 
 # Load preferences from remote (fail fast with short timeout)
 PREFS_LOADED=false
-if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 greene-login 'test -f /scratch/$USER/.config/torch/last_job_prefs && cat /scratch/$USER/.config/torch/last_job_prefs' > "$PREFS_FILE" 2>/dev/null; then
+if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 torch-compute 'test -f /scratch/$USER/.config/torch/last_job_prefs && cat /scratch/$USER/.config/torch/last_job_prefs' > "$PREFS_FILE" 2>/dev/null; then
   if [[ -f "$PREFS_FILE" && -r "$PREFS_FILE" && -s "$PREFS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$PREFS_FILE" || true
@@ -227,10 +233,10 @@ fi
 
 if [[ "$PREFS_LOADED" == false ]]; then
   # Try to determine if we can connect at all
-  if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 greene-login 'exit 0' 2>/dev/null; then
+  if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 torch-compute 'exit 0' 2>/dev/null; then
     printf "No preferences file found. One will be created after this session.\n\n"
   else
-    printf "${YEL}Warning: Could not connect to greene-login to load preferences.${RST}\n\n"
+    printf "${YEL}Warning: Could not connect to torch-compute to load preferences.${RST}\n\n"
   fi
 fi
 
@@ -388,7 +394,7 @@ done
 
 printf "${BLD}${CYA}\n[ Checking for PyCharm Backend ]\n${RST}\n"
 
-printf "Connecting to greene-login and searching for PyCharm installations...\n"
+printf "Connecting to torch-compute and searching for PyCharm installations...\n"
 
 PYCHARM_BACKENDS=$(ssh_try 'find /scratch/$USER -maxdepth 2 -type d -name "pycharm-*" 2>/dev/null | sed "s|.*/pycharm-||" | sort -V' || echo "")
 
@@ -587,21 +593,21 @@ fi
 ssh_try 'echo '"$JOB_ID"' > /scratch/$USER/.jb/job_id' || true
 printf "Allocation ID: ${BLD}${YEL}%s${RST}\n" "$JOB_ID"
 
-# --- Overwrite torch-proxy HostName in ~/.ssh/config ---
+# --- Overwrite torch-compute HostName in ~/.ssh/config ---
 if [[ "$NODE" == *.* ]]; then
   FQDN="$NODE"
 else
   FQDN="${NODE}.hpc.nyu.edu"
 fi
 
-# Ensure torch-proxy stanza exists
-if ! grep -q '^Host[[:space:]]\+torch-proxy' "$SSH_CONFIG"; then
+# Ensure torch-compute stanza exists
+if ! grep -q '^Host[[:space:]]\+torch-compute' "$SSH_CONFIG"; then
   {
     echo
-    echo "Host torch-proxy"
+    echo "Host torch-compute"
     echo "  Hostname $FQDN"
     echo "  User ${USER:-edk202}"
-    echo "  ProxyJump greene-login"
+    echo "  ProxyJump torch-compute"
     echo "  StrictHostKeyChecking no"
     echo "  ServerAliveInterval 60"
     echo "  ForwardAgent yes"
@@ -610,21 +616,21 @@ if ! grep -q '^Host[[:space:]]\+torch-proxy' "$SSH_CONFIG"; then
 fi
 
 # Replace any existing Hostname line inside that stanza (BSD/GNU portable)
-if ! sed -i.bak -E "/^Host[[:space:]]+torch-proxy$/,/^Host[[:space:]]/ s|^([[:space:]]*Hostname).*|\1 $FQDN|" "$SSH_CONFIG" 2>/dev/null; then
+if ! sed -i.bak -E "/^Host[[:space:]]+torch-compute$/,/^Host[[:space:]]/ s|^([[:space:]]*Hostname).*|\1 $FQDN|" "$SSH_CONFIG" 2>/dev/null; then
   perl -0777 -pe '
-    if(s/^Host\s+torch-proxy\b.*?(?=^Host\s|\z)/$&/ms){
+    if(s/^Host\s+torch-compute\b.*?(?=^Host\s|\z)/$&/ms){
       s/^(\s*Hostname).*/$1 '"$FQDN"'/m
     }' -i.bak -- "$SSH_CONFIG"
 fi
 
-printf "Updated ~/.ssh/config: torch-proxy -> %s\n" "$FQDN"
+printf "Updated ~/.ssh/config: torch-compute -> %s\n" "$FQDN"
 
 ### END: GET COMPUTE NODE ###
 
 
 ### BEGIN: START BACKEND INSIDE CONTAINER ###
 
-ssh -q greene-login env \
+ssh -q torch-compute env \
 CONTAINER_PATH="$CONTAINER_PATH" \
 PY_BACKEND_VER="$PY_BACKEND_VER" \
 REMOTE_PORT="$REMOTE_PORT" \
@@ -648,11 +654,11 @@ sing_args=( exec )
 [[ "$GPU" == yes ]] && sing_args+=( --nv )
 
 # Env for the container
-export SINGULARITYENV_JB_REMOTE_DEV_SCRIPT="$BP"
-export SINGULARITYENV_REMOTE_PORT="$REMOTE_PORT"
-export SINGULARITYENV_LC_ALL="C.UTF-8" SINGULARITYENV_LANG="C.UTF-8"
-export SINGULARITYENV_IDEA_SYSTEM_PATH="$JB/system-$JOB_NAME_REMOTE"
-export SINGULARITYENV_IDEA_LOG_PATH="$JB/logs-$JOB_NAME_REMOTE"
+export APPTAINERENV_JB_REMOTE_DEV_SCRIPT="$BP"
+export APPTAINERENV_REMOTE_PORT="$REMOTE_PORT"
+export APPTAINERENV_LC_ALL="C.UTF-8" APPTAINERENV_LANG="C.UTF-8"
+export APPTAINERENV_IDEA_SYSTEM_PATH="$JB/system-$JOB_NAME_REMOTE"
+export APPTAINERENV_IDEA_LOG_PATH="$JB/logs-$JOB_NAME_REMOTE"
 
 # Launch backend inside the job allocation; log to scratch
 nohup srun --jobid "$JOB_ID_REMOTE" --ntasks=1 \
@@ -696,7 +702,7 @@ printf "${BLD}${CYA}\n[ Starting Backend ]${RST}\n\n" >&2
 
 JOIN_URL=""
 for i in {1..120}; do
-  JOIN_URL="$(ssh -q -o ConnectTimeout=3 greene-login 'grep -ao "tcp://[^[:space:]]*" /scratch/$USER/.jb/backend.log 2>/dev/null | tail -n1' 2>/dev/null || true)"
+  JOIN_URL="$(ssh -q -o ConnectTimeout=3 torch-compute 'grep -ao "tcp://[^[:space:]]*" /scratch/$USER/.jb/backend.log 2>/dev/null | tail -n1' 2>/dev/null || true)"
   if [[ -n "$JOIN_URL" ]]; then
     printf "\n"
     break
@@ -710,7 +716,7 @@ done
 
 if [[ -z "$JOIN_URL" ]]; then
   printf "${RED}No join link yet.${RST}\n"
-  printf "Check logs on greene-login: ${BLD}/scratch/\$USER/.jb/start_backend.launcher.log${RST} or ${BLD}/scratch/\$USER/.jb/backend.log${RST}\n"
+  printf "Check logs on torch-compute: ${BLD}/scratch/\$USER/.jb/start_backend.launcher.log${RST} or ${BLD}/scratch/\$USER/.jb/backend.log${RST}\n"
   exit 1
 fi
 
@@ -744,7 +750,7 @@ if probe_listen "$LOCAL_PORT"; then
 else
   printf '\nForwarding localhost:%s -> %s:%s\n' "$LOCAL_PORT" "$NODE" "$REMOTE_PORT"
   ssh -N -f -F "$SSH_CONFIG" -o ExitOnForwardFailure=yes \
-      -L "${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}" torch-proxy
+      -L "${LOCAL_PORT}:127.0.0.1:${REMOTE_PORT}" torch-compute
 fi
 
 printf '\n%s[ Connection Info ]%s\n' "$BLD$CYA" "$RST"
@@ -754,7 +760,7 @@ if [[ -n "${JOIN_LOCAL:-}" ]]; then
 elif [[ -n "${JOIN_URL:-}" ]]; then
   printf '\nRemote Link (maps to %s locally):\n%s%s%s\n' "$LOCAL_PORT" "$CYA" "$JOIN_URL" "$RST"
 else
-  printf '\n%sNo join link yet.%s Check %s/scratch/$USER/.jb/backend.log%s on greene-login.\n' "$RED" "$RST" "$BLD" "$RST"
+  printf '\n%sNo join link yet.%s Check %s/scratch/$USER/.jb/backend.log%s on torch-compute.\n' "$RED" "$RST" "$BLD" "$RST"
 fi
 
 printf '\n%sJetBrains Gateway -> "Connect via link" -> paste the link above%s' "$BLU" "$RST"
