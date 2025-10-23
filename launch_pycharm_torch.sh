@@ -186,7 +186,7 @@ _prompt() {
 
 # Locations #
 SSH_CONFIG="$HOME/.ssh/config"
-PREFS_FILE="/tmp/greene_last_job_prefs_$$"
+PREFS_FILE="/tmp/torch_last_job_prefs_$$"
 
 # Initialize all variables to empty
 TIME_HOURS=""
@@ -216,11 +216,11 @@ printf "${BLD}${CYA}\n[ Compute Node Resource Request ]\n${RST}\n"
 
 # Load preferences from remote (fail fast with short timeout)
 PREFS_LOADED=false
-if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 greene-login 'test -f /scratch/$USER/.config/greene/last_job_prefs && cat /scratch/$USER/.config/greene/last_job_prefs' > "$PREFS_FILE" 2>/dev/null; then
+if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 greene-login 'test -f /scratch/$USER/.config/torch/last_job_prefs && cat /scratch/$USER/.config/torch/last_job_prefs' > "$PREFS_FILE" 2>/dev/null; then
   if [[ -f "$PREFS_FILE" && -r "$PREFS_FILE" && -s "$PREFS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$PREFS_FILE" || true
-    printf "Loaded saved preferences from /scratch/\$USER/.config/greene/last_job_prefs\n\n"
+    printf "Loaded saved preferences from /scratch/\$USER/.config/torch/last_job_prefs\n\n"
     PREFS_LOADED=true
   fi
 fi
@@ -454,9 +454,9 @@ CONTAINER_PATH=$CONTAINER_PATH
 PY_BACKEND_VER=$PY_BACKEND_VER"
 
 # Save to remote scratch
-printf '%s\n' "$PREFS_CONTENT" | ssh_try 'mkdir -p /scratch/$USER/.config/greene && cat > /scratch/$USER/.config/greene/last_job_prefs'
+printf '%s\n' "$PREFS_CONTENT" | ssh_try 'mkdir -p /scratch/$USER/.config/torch && cat > /scratch/$USER/.config/torch/last_job_prefs'
 
-printf "${BLD}Saved preferences to remote: /scratch/\$USER/.config/greene/last_job_prefs${RST}\n"
+printf "${BLD}Saved preferences to remote: /scratch/\$USER/.config/torch/last_job_prefs${RST}\n"
 
 # Clean up local temp file
 rm -f "$PREFS_FILE"
