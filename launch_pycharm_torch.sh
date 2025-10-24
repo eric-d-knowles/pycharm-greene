@@ -605,21 +605,24 @@ if ! grep -q '^Host[[:space:]]\+torch-compute' "$SSH_CONFIG"; then
   {
     echo
     echo "Host torch-compute"
-    echo "  Hostname $FQDN"
-    echo "  User ${USER:-edk202}"
-    echo "  ProxyJump torch-compute"
-    echo "  StrictHostKeyChecking no"
-    echo "  ServerAliveInterval 60"
-    echo "  ForwardAgent yes"
-    echo "  UserKnownHostsFile /dev/null"
+    echo "  User edk202"
+    echo "  ProxyJump greene-login"
+    echo "  PubkeyAuthentication yes"
+    echo "  IdentitiesOnly yes"
+    echo "  ServerAliveInterval 30"
+    echo "  ServerAliveCountMax 6"
+    echo "  StrictHostKeyChecking accept-new"
+    echo "  UserKnownHostsFile ~/.ssh/known_hosts"
+    echo "  LogLevel QUIET"
+    echo "  HostName $FQDN"
   } >> "$SSH_CONFIG"
 fi
 
-# Replace any existing Hostname line inside that stanza (BSD/GNU portable)
-if ! sed -i.bak -E "/^Host[[:space:]]+torch-compute$/,/^Host[[:space:]]/ s|^([[:space:]]*Hostname).*|\1 $FQDN|" "$SSH_CONFIG" 2>/dev/null; then
+# Replace any existing HostName line inside that stanza (BSD/GNU portable)
+if ! sed -i.bak -E "/^Host[[:space:]]+torch-compute$/,/^Host[[:space:]]/ s|^([[:space:]]*HostName).*|\1 $FQDN|" "$SSH_CONFIG" 2>/dev/null; then
   perl -0777 -pe '
     if(s/^Host\s+torch-compute\b.*?(?=^Host\s|\z)/$&/ms){
-      s/^(\s*Hostname).*/$1 '"$FQDN"'/m
+      s/^(\s*HostName).*/$1 '"$FQDN"'/m
     }' -i.bak -- "$SSH_CONFIG"
 fi
 
