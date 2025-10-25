@@ -1,0 +1,66 @@
+# Backup files
+*~
+*.bak
+*.backup
+*.swp
+*.swo
+*.tmp
+
+# Log files
+*.log
+logs/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# IDE and editor files
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
+.vim/
+.netrwhist
+
+# Testing and coverage
+coverage/
+test-results/
+.bats/
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+*.key
+id_rsa*
+*.crt
+*.p12
+
+# Build artifacts (if you have any)
+dist/
+build/
+*.tar.gz
+*.zip
+*.deb
+*.rpm
+
+# Local configuration
+local.conf
+config.local
+*.local
+
+# Cache directories
+.cache/
+cache/
+
+# Temporary directories
+tmp/
+temp/
