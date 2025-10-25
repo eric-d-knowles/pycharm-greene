@@ -10,8 +10,8 @@ on_err() {
   local rc=$? line=${BASH_LINENO[0]:-?} cmd=${BASH_COMMAND:-?}
   printf '\n%s[ ERROR ]%s rc=%s line=%s cmd=%q\n' "$RED$BLD" "$RST" "$rc" "$line" "$cmd" >&2
   # peek at recent remote logs if available
-  ssh -q torch-compute 'tail -n 40 /scratch/$USER/.jb/salloc.out 2>/dev/null || true' >&2
-  ssh -q torch-compute 'tail -n 60 /scratch/$USER/.jb/backend.log 2>/dev/null || true' >&2
+  ssh -q torch-login 'tail -n 40 /scratch/$USER/.jb/salloc.out 2>/dev/null || true' >&2
+  ssh -q torch-login 'tail -n 60 /scratch/$USER/.jb/backend.log 2>/dev/null || true' >&2
   cleanup
   exit "$rc"
 }
@@ -40,16 +40,16 @@ cleanup() {
   local port="${LOCAL_PORT:-7777}"
 
   # End existing Slurm job(s) best-effort
-  ssh -q torch-compute 'scancel -u "$USER"' || true
+  ssh -q torch-login 'scancel -u "$USER"' || true
 
   # Kill any lingering salloc processes that may hold file handles
-  ssh -q torch-compute 'pkill -u "$USER" salloc' || true
+  ssh -q torch-login 'pkill -u "$USER" salloc' || true
 
   # Brief wait for processes to fully terminate and release file handles
   sleep 1
 
   # Reset .jb on scratch (best-effort, suppress NFS lock file errors)
-  ssh -q torch-compute 'rm -rf /scratch/$USER/.jb 2>/dev/null; mkdir -p /scratch/$USER/.jb' || true
+  ssh -q torch-login 'rm -rf /scratch/$USER/.jb 2>/dev/null; mkdir -p /scratch/$USER/.jb' || true
 
   # kill local SSH tunnels
   pkill -f "ssh -N -f -L ${port}:127.0.0.1:" >/dev/null 2>&1 || true
@@ -71,7 +71,7 @@ ssh_try() {
       -o ConnectTimeout=6 -o ConnectionAttempts=1 \
       -o ServerAliveInterval=10 -o ServerAliveCountMax=2 \
       -o ControlMaster=no \
-      torch-compute "$@" && return 0
+      torch-login "$@" && return 0
     rc=$?; sleep "$delay"; (( delay<8 && (delay*=2) ))
   done
   return "$rc"
@@ -222,7 +222,7 @@ printf "${BLD}${CYA}\n[ Compute Node Resource Request ]\n${RST}\n"
 
 # Load preferences from remote (fail fast with short timeout)
 PREFS_LOADED=false
-if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 torch-compute 'test -f /scratch/$USER/.config/torch/last_job_prefs && cat /scratch/$USER/.config/torch/last_job_prefs' > "$PREFS_FILE" 2>/dev/null; then
+if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 torch-login 'test -f /scratch/$USER/.config/torch/last_job_prefs && cat /scratch/$USER/.config/torch/last_job_prefs' > "$PREFS_FILE" 2>/dev/null; then
   if [[ -f "$PREFS_FILE" && -r "$PREFS_FILE" && -s "$PREFS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$PREFS_FILE" || true
@@ -233,10 +233,10 @@ fi
 
 if [[ "$PREFS_LOADED" == false ]]; then
   # Try to determine if we can connect at all
-  if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 torch-compute 'exit 0' 2>/dev/null; then
+  if ssh -q -o ConnectTimeout=3 -o ConnectionAttempts=1 torch-login 'exit 0' 2>/dev/null; then
     printf "No preferences file found. One will be created after this session.\n\n"
   else
-    printf "${YEL}Warning: Could not connect to torch-compute to load preferences.${RST}\n\n"
+    printf "${YEL}Warning: Could not connect to torch-login to load preferences.${RST}\n\n"
   fi
 fi
 
@@ -394,7 +394,7 @@ done
 
 printf "${BLD}${CYA}\n[ Checking for PyCharm Backend ]\n${RST}\n"
 
-printf "Connecting to torch-compute and searching for PyCharm installations...\n"
+printf "Connecting to torch-login and searching for PyCharm installations...\n"
 
 PYCHARM_BACKENDS=$(ssh_try 'find /scratch/$USER -maxdepth 2 -type d -name "pycharm-*" 2>/dev/null | sed "s|.*/pycharm-||" | sort -V' || echo "")
 
@@ -509,7 +509,8 @@ echo "Running: $salloc_cmd" >> "$JB/salloc.out"
 
 # Run salloc in background
 $salloc_cmd bash -c "
-  echo \${SLURM_NODELIST:-NONE} > $JB/node
+  node=\"\${SLURM_NODELIST:-NONE}\"
+  echo \"\$node\" > $JB/node.tmp && mv $JB/node.tmp $JB/node
   sleep infinity
 " >> "$JB/salloc.out" 2>&1 &
 
@@ -529,8 +530,8 @@ ssh_try "cd /scratch/\$USER/.jb && nohup env \
   GPU='$GPU' \
   bash submit_job.sh > submit.log 2>&1 &"
 
-# Give it a moment to start
-sleep 3
+# Give it a moment to start and for the allocation to potentially complete
+sleep 5
 
 # Check if the submission worked
 INITIAL_CHECK=$(ssh_try 'squeue -h -u "$USER" --name '"$JOB_NAME"' 2>&1' || echo "FAILED")
@@ -551,6 +552,13 @@ for _ in {1..180}; do
   out="$(ssh_try 'cat /scratch/$USER/.jb/node 2>/dev/null' || true)" || true
   NODE="$(printf '%s' "$out" | tr -d '[:space:]')"
 
+  # Check for NONE indicating SLURM_NODELIST was unset (error condition)
+  if [[ "$NODE" == "NONE" ]]; then
+    printf "\n${RED}Error: salloc completed but no node was assigned${RST}\n"
+    ssh_try 'tail -n 40 /scratch/$USER/.jb/salloc.out 2>/dev/null' >&2 || true
+    exit 1
+  fi
+
   # Prefer direct %i %T %R; if empty (or error suppressed), keep last known
   status="$(_fetch_status || true)"
   if [[ -n "$status" ]]; then
@@ -568,7 +576,7 @@ for _ in {1..180}; do
 
   _print_wait_line "$STATE" "$REASON"
 
-  [[ -n "$NODE" ]] && break
+  [[ -n "$NODE" && "$NODE" != "NONE" ]] && break
   sleep 1
 done
 printf "\n"
@@ -633,7 +641,7 @@ printf "Updated ~/.ssh/config: torch-compute -> %s\n" "$FQDN"
 
 ### BEGIN: START BACKEND INSIDE CONTAINER ###
 
-ssh -q torch-compute env \
+ssh -q torch-login env \
 CONTAINER_PATH="$CONTAINER_PATH" \
 PY_BACKEND_VER="$PY_BACKEND_VER" \
 REMOTE_PORT="$REMOTE_PORT" \
@@ -705,7 +713,7 @@ printf "${BLD}${CYA}\n[ Starting Backend ]${RST}\n\n" >&2
 
 JOIN_URL=""
 for i in {1..120}; do
-  JOIN_URL="$(ssh -q -o ConnectTimeout=3 torch-compute 'grep -ao "tcp://[^[:space:]]*" /scratch/$USER/.jb/backend.log 2>/dev/null | tail -n1' 2>/dev/null || true)"
+  JOIN_URL="$(ssh -q -o ConnectTimeout=3 torch-login 'grep -ao "tcp://[^[:space:]]*" /scratch/$USER/.jb/backend.log 2>/dev/null | tail -n1' 2>/dev/null || true)"
   if [[ -n "$JOIN_URL" ]]; then
     printf "\n"
     break
@@ -719,7 +727,7 @@ done
 
 if [[ -z "$JOIN_URL" ]]; then
   printf "${RED}No join link yet.${RST}\n"
-  printf "Check logs on torch-compute: ${BLD}/scratch/\$USER/.jb/start_backend.launcher.log${RST} or ${BLD}/scratch/\$USER/.jb/backend.log${RST}\n"
+  printf "Check logs on torch-login: ${BLD}/scratch/\$USER/.jb/start_backend.launcher.log${RST} or ${BLD}/scratch/\$USER/.jb/backend.log${RST}\n"
   exit 1
 fi
 
@@ -763,7 +771,7 @@ if [[ -n "${JOIN_LOCAL:-}" ]]; then
 elif [[ -n "${JOIN_URL:-}" ]]; then
   printf '\nRemote Link (maps to %s locally):\n%s%s%s\n' "$LOCAL_PORT" "$CYA" "$JOIN_URL" "$RST"
 else
-  printf '\n%sNo join link yet.%s Check %s/scratch/$USER/.jb/backend.log%s on torch-compute.\n' "$RED" "$RST" "$BLD" "$RST"
+  printf '\n%sNo join link yet.%s Check %s/scratch/$USER/.jb/backend.log%s on torch-login.\n' "$RED" "$RST" "$BLD" "$RST"
 fi
 
 printf '\n%sJetBrains Gateway -> "Connect via link" -> paste the link above%s' "$BLU" "$RST"
