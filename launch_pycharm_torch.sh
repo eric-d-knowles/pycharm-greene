@@ -507,11 +507,16 @@ fi
 
 echo "Running: $salloc_cmd" >> "$JB/salloc.out"
 
-# Run salloc in background
-$salloc_cmd bash -c "
-  node=\"\${SLURM_NODELIST:-NONE}\"
-  echo \"\$node\" > $JB/node.tmp && mv $JB/node.tmp $JB/node
-  sleep infinity
+# Run salloc in background - command writes node and keeps running
+# The command's output is redirected inside the sh -c itself
+$salloc_cmd sh -c "
+  exec >> $JB/node_debug.log 2>&1
+  set -x
+  echo \"=== Job started at \\\$(date) ===\"
+  echo \"SLURM_NODELIST=\\\${SLURM_NODELIST}\"
+  echo \\\${SLURM_NODELIST:-NONE} > $JB/node
+  echo \"Node file written\"
+  exec sleep infinity
 " >> "$JB/salloc.out" 2>&1 &
 
 echo "Background PID: $!" >> "$JB/salloc.out"
