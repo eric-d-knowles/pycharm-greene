@@ -231,22 +231,11 @@ export APPTAINERENV_IDEA_SYSTEM_PATH="$JB/system-$JOB_NAME"
 export APPTAINERENV_IDEA_LOG_PATH="$JB/logs-$JOB_NAME"
 
 # Launch backend using srun to run on the compute node
-nohup srun --jobid "$JOB_ID" --ntasks=1 \
+setsid nohup srun --jobid "$JOB_ID" --ntasks=1 --mem=0 \
   singularity $SING_ARGS "$CONTAINER_PATH" /bin/bash -c "
     LOG=\"$JB/backend.log\"
     : > \"\$LOG\"
-    \"$BP\" run --listen 127.0.0.1 --port $REMOTE_PORT >> \"\$LOG\" 2>&1 &
-    BPID=\$!
-
-    for i in \$(seq 1 120); do
-      if ss -ltn 2>/dev/null | grep -q \":$REMOTE_PORT \"; then
-        echo \"READY\" > \"$JB/ready\"
-        break
-      fi
-      sleep 1
-    done
-
-    wait \"\$BPID\"
+    \"$BP\" run --listen 127.0.0.1 --port $REMOTE_PORT >> \"\$LOG\" 2>&1
 " > "$JB/backend_launcher.log" 2>&1 &
 
 # Wait for backend ready
