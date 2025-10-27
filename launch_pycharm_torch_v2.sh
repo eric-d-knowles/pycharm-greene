@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# Set working directory to script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 # Local launcher - uploads and runs remote script, then creates tunnel
 set -Eeuo pipefail
 
@@ -22,7 +27,7 @@ else
 fi
 
 SSH_CONFIG="$HOME/.ssh/config"
-LOCAL_REMOTE_SCRIPT="/Users/ericknowles/bin/pycharm-launch/remote_launcher.sh"
+LOCAL_REMOTE_SCRIPT="remote_launcher.sh"
 
 cleanup() {
   set +e
