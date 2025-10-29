@@ -230,13 +230,23 @@ export APPTAINERENV_LANG="C.UTF-8"
 export APPTAINERENV_IDEA_SYSTEM_PATH="$JB/system-$JOB_NAME"
 export APPTAINERENV_IDEA_LOG_PATH="$JB/logs-$JOB_NAME"
 
+# Create wrapper script for backend
+cat > "$JB/run_backend.sh" <<'WRAPPER'
+#!/bin/bash
+LOG="$1"
+BACKEND="$2"
+PORT="$3"
+
+touch "$LOG"
+"$BACKEND" run --listen 127.0.0.1 --port "$PORT" >> "$LOG" 2>&1
+WRAPPER
+chmod +x "$JB/run_backend.sh"
+
 # Launch backend using srun to run on the compute node
 setsid nohup srun --jobid "$JOB_ID" --ntasks=1 --mem=0 \
-  singularity $SING_ARGS "$CONTAINER_PATH" /bin/bash -c "
-    LOG=\"$JB/backend.log\"
-    : > \"\$LOG\"
-    \"$BP\" run --listen 127.0.0.1 --port $REMOTE_PORT >> \"\$LOG\" 2>&1
-" > "$JB/backend_launcher.log" 2>&1 &
+  singularity $SING_ARGS "$CONTAINER_PATH" \
+  "$JB/run_backend.sh" "$JB/backend.log" "$BP" "$REMOTE_PORT" \
+  > "$JB/backend_launcher.log" 2>&1 &
 
 # Wait for backend ready
 READY=false
