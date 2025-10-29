@@ -219,7 +219,7 @@ if [[ ! -x "$BP" ]]; then
 fi
 
 # Setup singularity args
-SING_ARGS="exec"
+SING_ARGS="exec --bind /scratch:/scratch"
 [[ "$GPU" == "yes" ]] && SING_ARGS="$SING_ARGS --nv"
 
 # Export env for container
