@@ -27,7 +27,7 @@ else
 fi
 
 SSH_CONFIG="$HOME/.ssh/config"
-LOCAL_REMOTE_SCRIPT="remote_launcher.sh"
+LOCAL_REMOTE_SCRIPT="remote_launcher_greene.sh"
 
 cleanup() {
   set +e
