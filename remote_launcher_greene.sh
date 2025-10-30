@@ -191,7 +191,7 @@ printf "${GRN}✓${RST}\n"
 
 # Poll for node
 NODE=""
-for i in {1..360}; do
+for i in {1..600}; do
   if [[ -f "$JB/node" ]]; then
     NODE=$(cat "$JB/node" 2>/dev/null | tr -d '[:space:]')
     [[ -n "$NODE" && "$NODE" != "NONE" ]] && break
