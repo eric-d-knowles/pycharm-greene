@@ -196,6 +196,7 @@ for i in {1..360}; do
     NODE=$(cat "$JB/node" 2>/dev/null | tr -d '[:space:]')
     [[ -n "$NODE" && "$NODE" != "NONE" ]] && break
   fi
+
   # Show status
   if status=$(squeue -h -u "$USER" --name "$JOB_NAME" -o "%T %R" 2>/dev/null | head -n1); then
     printf "\rJob status: ${GRY}%s${RST}\033[K" "$status"
